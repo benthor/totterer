@@ -81,8 +81,9 @@ func (p *Post) Hash() (Hash, error) {
 }
 
 type State struct {
-	Profile    Hash
-	LatestPost Hash
+	Profile             Hash
+	LatestPost          Hash
+	SubscriptionsLatest map[Hash]Hash
 }
 
 func LoadState() (*State, error) {
@@ -94,12 +95,12 @@ func LoadState() (*State, error) {
 			log.Println(err)
 			return nil, err
 		}
-		prof := Profile{peerID, "Change Me", "Change Me Too", map[Hash]bool{}}
+		prof := Profile{peerID, "Change Me", "Change Me Too", map[Hash]bool{peerID: true}}
 		hash, err := prof.Hash()
 		if err != nil {
 			return nil, err
 		}
-		state := State{hash, ""}
+		state := State{hash, "", map[Hash]Hash{}}
 		err = state.Save()
 		if err != nil {
 			return nil, err
@@ -134,6 +135,7 @@ func (c *State) NewPost(r io.Reader) error {
 	} else {
 		c.LatestPost = hash
 		c.Save()
+		err = publish(hash)
 	}
 	return err
 }
@@ -145,11 +147,7 @@ func upload(r io.Reader) (Hash, error) {
 		err  error
 		re   *regexp.Regexp
 	)
-	re, err = regexp.Compile("added ([^ ]*)")
-	if err != nil {
-		return hash, err
-	}
-
+	re = regexp.MustCompile("added ([^ ]*)")
 	cmd := exec.Command("ipfs", "add", "-")
 	cmd.Stdin = r
 	cmd.Stdout = &out
@@ -164,6 +162,11 @@ func upload(r io.Reader) (Hash, error) {
 	}
 
 	return hash, err
+}
+
+func publish(hash Hash) error {
+	//re = regexp.MustCompile("Published to ([^:]*):")
+	return exec.Command("ipfs", "name", "publish", string(hash)).Run()
 }
 
 func download(hash Hash, w io.Writer) error {
@@ -220,22 +223,11 @@ func main() {
 
 	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		var (
-			top  bool
 			post *Post
 			err  error
 		)
-		if r.URL.Path != "/" {
-			top = false
-			post, err = Hash2Post(Hash(strings.Trim(r.URL.Path, "/")))
-		} else {
-			top = true
-			post, err = Hash2Post(state.LatestPost)
-		}
-		if err != nil {
-			log.Println(err)
-		}
 
-		if r.Method == "POST" && top {
+		if r.Method == "POST" {
 			reader, err := r.MultipartReader()
 			if err != nil {
 				log.Println(err)
@@ -261,6 +253,15 @@ func main() {
 				log.Fatal(err)
 			}
 		}
+		if r.URL.Path != "/" {
+			post, err = Hash2Post(Hash(strings.Trim(r.URL.Path, "/")))
+		} else {
+			post, err = Hash2Post(state.LatestPost)
+		}
+		if err != nil {
+			log.Println(err)
+		}
+
 		tpl, err := template.ParseFiles("theme/post.html")
 		if err != nil {
 			fmt.Fprintln(w, err)

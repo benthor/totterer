@@ -28,26 +28,36 @@ type Profile struct {
 	Subscriptions map[Hash]bool
 }
 
-func Hash2Profile(hash Hash) (*Profile, error) {
-	var (
-		buff    bytes.Buffer
-		profile Profile
-	)
-	download(hash, &buff)
-	err := json.NewDecoder(&buff).Decode(&profile)
-	return &profile, err
+func hash2interface(hash Hash, i interface{}) error {
+	var buff bytes.Buffer
+	err := download(hash, &buff)
+	if err != nil {
+		return err
+	}
+	return json.NewDecoder(&buff).Decode(&i)
 }
 
-func (p *Profile) Hash() (Hash, error) {
+func interface2hash(i interface{}) (Hash, error) {
 	var (
-		buff bytes.Buffer
 		hash Hash
+		buff bytes.Buffer
 	)
-	err := json.NewEncoder(&buff).Encode(p)
+	err := json.NewEncoder(&buff).Encode(&i)
 	if err != nil {
 		return hash, err
 	}
 	return upload(&buff)
+}
+
+func Hash2Profile(hash Hash) (*Profile, error) {
+	var profile Profile
+	err := hash2interface(hash, &profile)
+	return &profile, err
+}
+
+func (p *Profile) Hash() (Hash, error) {
+	return interface2hash(p)
+
 }
 
 type Post struct {
@@ -58,6 +68,16 @@ type Post struct {
 	Previous Hash
 	Via      Hash
 	Version  float64
+}
+
+func Hash2Post(hash Hash) (*Post, error) {
+	var post Post
+	err := hash2interface(hash, &post)
+	return &post, err
+}
+
+func (p *Post) Hash() (Hash, error) {
+	return interface2hash(p)
 }
 
 type Config struct {
@@ -96,6 +116,10 @@ func (c *Config) Save() error {
 		return err
 	}
 	return json.NewEncoder(file).Encode(c)
+}
+
+func (c *Config) NewPost() {
+
 }
 
 func Upload(c *Config, r io.Reader) error {
@@ -168,11 +192,11 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	prof, err := Hash2Profile(config.Profile)
-	if err != nil {
-		log.Fatal(err)
-	}
 	http.HandleFunc("/profile", func(w http.ResponseWriter, r *http.Request) {
+		prof, err := Hash2Profile(config.Profile)
+		if err != nil {
+			log.Fatal(err)
+		}
 		if r.Method == "POST" {
 			r.ParseForm()
 			//fmt.Printf("%q", r.Form)

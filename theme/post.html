@@ -2,12 +2,23 @@
 <html>
   <head>
     <meta charset="UTF-8">
-    <title>{{.Title}}</title>
+    <title>Fnord</title>
   </head>
   <body>
     <form name="upload" method="POST" action="/" enctype="multipart/form-data">
       <input type="file" name="fileupload" multiple/>
       <input type="submit" value="Go" />
     </form>
+    {{if . }}<ul>
+      <li>{{.Time}}</li>
+      <li><a href="/ipfs/{{.Content}}"><img src="/ipfs/{{.Content}}" width="500"/></a></li>
+      <li>
+	<ul>
+	  {{if .Previous}}<li><a href="/{{.Previous}}">Previous</a></li>{{end}}
+	  <li><a href="/ipfs/{{.Profile}}">Author</a></li>
+	  {{if .Via}}<li><a href="/{{.Via}}">Via</a></li>{{end}}
+	</ul>
+      </li>
+    </uls>{{end}}
   </body>
 </html>

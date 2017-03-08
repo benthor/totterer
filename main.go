@@ -99,7 +99,7 @@ func LoadState() (*State, error) {
 		if err != nil {
 			return nil, err
 		}
-		state := State{hash, peerID}
+		state := State{hash, ""}
 		err = state.Save()
 		if err != nil {
 			return nil, err
@@ -219,7 +219,23 @@ func main() {
 	})
 
 	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		if r.Method == "POST" {
+		var (
+			top  bool
+			post *Post
+			err  error
+		)
+		if r.URL.Path != "/" {
+			top = false
+			post, err = Hash2Post(Hash(strings.Trim(r.URL.Path, "/")))
+		} else {
+			top = true
+			post, err = Hash2Post(state.LatestPost)
+		}
+		if err != nil {
+			log.Println(err)
+		}
+
+		if r.Method == "POST" && top {
 			reader, err := r.MultipartReader()
 			if err != nil {
 				log.Println(err)
@@ -250,7 +266,7 @@ func main() {
 			fmt.Fprintln(w, err)
 			log.Fatal(err)
 		}
-		tpl.Execute(w, nil)
+		tpl.Execute(w, post)
 	})
 
 	http.HandleFunc("/ipfs/", func(w http.ResponseWriter, r *http.Request) {
@@ -260,5 +276,5 @@ func main() {
 		}
 	})
 
-	log.Fatal(http.ListenAndServe(":1337", nil))
+	log.Fatal(http.ListenAndServe("localhost:1337", nil))
 }

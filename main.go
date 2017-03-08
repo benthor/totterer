@@ -17,7 +17,7 @@ import (
 )
 
 const VERSION = 0.1
-const CONFIG = "config.json"
+const STATE = "state.json"
 
 type Hash string
 
@@ -80,65 +80,62 @@ func (p *Post) Hash() (Hash, error) {
 	return interface2hash(p)
 }
 
-type Config struct {
+type State struct {
 	Profile    Hash
 	LatestPost Hash
 }
 
-func LoadConfig() (*Config, error) {
-	file, err := os.Open(CONFIG)
+func LoadState() (*State, error) {
+	file, err := os.Open(STATE)
 	if err != nil {
 		log.Println(err)
 		peerID, err := whoami()
 		if err != nil {
+			log.Println(err)
 			return nil, err
 		}
-		prof := Profile{peerID, "Default", "Default", map[Hash]bool{}}
+		prof := Profile{peerID, "Change Me", "Change Me Too", map[Hash]bool{}}
 		hash, err := prof.Hash()
 		if err != nil {
 			return nil, err
 		}
-		config := Config{hash, peerID}
-		err = config.Save()
+		state := State{hash, peerID}
+		err = state.Save()
 		if err != nil {
 			return nil, err
 		}
-		return &config, err
+		return &state, err
 	}
-	var c Config
+	var c State
 	err = json.NewDecoder(file).Decode(&c)
 	return &c, err
 }
 
-func (c *Config) Save() error {
-	file, err := os.Create(CONFIG)
+func (c *State) Save() error {
+	file, err := os.Create(STATE)
 	if err != nil {
+		log.Println(err)
 		return err
 	}
+	log.Println("updating local state")
 	return json.NewEncoder(file).Encode(c)
 }
 
-func (c *Config) NewPost() {
-
-}
-
-func Upload(c *Config, r io.Reader) error {
+func (c *State) NewPost(r io.Reader) error {
 	hash, err := upload(r)
 	if err != nil {
 		log.Println(err)
 		return err
 	}
 	post := Post{"", time.Now(), hash, c.Profile, c.LatestPost, "", VERSION}
-	var buff bytes.Buffer
-	json.NewEncoder(&buff).Encode(post)
-	hash, err = upload(&buff)
+	hash, err = post.Hash()
 	if err != nil {
 		log.Println(err)
-		return err
+	} else {
+		c.LatestPost = hash
+		c.Save()
 	}
-	c.LatestPost = hash
-
-	return nil
+	return err
 }
 
 func upload(r io.Reader) (Hash, error) {
@@ -162,9 +159,17 @@ func upload(r io.Reader) (Hash, error) {
 		hash = Hash(re.FindStringSubmatch(out.String())[1])
 		//hash = "<a href=\"/ipfs/" + tmp + "\">" + tmp + "</a>"
 
+	} else {
+		log.Println(err)
 	}
 
 	return hash, err
+}
+
+func download(hash Hash, w io.Writer) error {
+	cmd := exec.Command("ipfs", "cat", string(hash))
+	cmd.Stdout = w
+	return cmd.Run()
 }
 
 func whoami() (Hash, error) {
@@ -181,19 +186,14 @@ func whoami() (Hash, error) {
 	return hash, err
 }
 
-func download(hash Hash, w io.Writer) error {
-	cmd := exec.Command("ipfs", "cat", string(hash))
-	cmd.Stdout = w
-	return cmd.Run()
-}
-
 func main() {
-	config, err := LoadConfig()
+	log.SetFlags(log.LstdFlags | log.Lshortfile)
+	state, err := LoadState()
 	if err != nil {
 		log.Fatal(err)
 	}
 	http.HandleFunc("/profile", func(w http.ResponseWriter, r *http.Request) {
-		prof, err := Hash2Profile(config.Profile)
+		prof, err := Hash2Profile(state.Profile)
 		if err != nil {
 			log.Fatal(err)
 		}
@@ -206,8 +206,8 @@ func main() {
 			if err != nil {
 				log.Fatal(err)
 			}
-			config.Profile = hash
-			config.Save()
+			state.Profile = hash
+			state.Save()
 			//save(prof, "profile.json")
 		}
 		tpl, err := template.ParseFiles("theme/profile.html")
@@ -219,50 +219,38 @@ func main() {
 	})
 
 	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		res := []string{}
 		if r.Method == "POST" {
 			reader, err := r.MultipartReader()
 			if err != nil {
 				log.Println(err)
-				res = append(res, err.Error())
 			} else {
 				for {
 					p, err := reader.NextPart()
 					if err != nil {
 						if err == io.EOF {
-							res = append(res, "all done")
+							err = nil
 							break
 						} else {
-							log.Println(err)
-							res = append(res, err.Error())
 							continue
 						}
 					}
-					hash, err := upload(p)
+					err = state.NewPost(p)
 					if err != nil {
 						log.Println(err)
-						res = append(res, err.Error())
 					}
-					res = append(res, string(hash))
 				}
 			}
+			if err != nil {
+				fmt.Fprintln(w, err)
+				log.Fatal(err)
+			}
 		}
-		message := ""
-		if len(res) > 0 {
-			message += "<ul><li>" + strings.Join(res, "</li><li>") + "</li><ul>"
+		tpl, err := template.ParseFiles("theme/post.html")
+		if err != nil {
+			fmt.Fprintln(w, err)
+			log.Fatal(err)
 		}
-		fmt.Fprintf(w, `
-<html>
-<head></head>
-<body>
-%s
-<form name="upload" method="POST" action="/" enctype="multipart/form-data">
-<input type="file" name="fileupload" multiple/>
-<input type="submit" value="Go" />
-</form>
-</body>
-</html>
-`, message)
+		tpl.Execute(w, nil)
 	})
 
 	http.HandleFunc("/ipfs/", func(w http.ResponseWriter, r *http.Request) {

@@ -6,19 +6,46 @@ import (
 	"io"
 	"log"
 	//	"mime/multipart"
+	"encoding/json"
+	"html/template"
 	"net/http"
+	"os"
 	"os/exec"
 	"regexp"
 	"strings"
+	"time"
 )
 
-type Command struct {
+const VERSION = 0.1
+
+type Hash string
+
+type Profile struct {
+	PeerID        Hash
+	Title         string
+	Description   string
+	Subscriptions map[Hash]bool
 }
 
-func upload(r io.Reader) (string, error) {
+type Post struct {
+	Type     string // TODO
+	Time     time.Time
+	Content  Hash
+	Profile  Hash
+	Previous Hash
+	Via      Hash
+	Version  float64
+}
+
+type Config struct {
+	Profile    Hash
+	LatestPost Hash
+}
+
+func upload(r io.Reader) (Hash, error) {
 	var (
 		out  bytes.Buffer
-		hash string
+		hash Hash
 		err  error
 		re   *regexp.Regexp
 	)
@@ -33,10 +60,25 @@ func upload(r io.Reader) (string, error) {
 	err = cmd.Run()
 	if err == nil {
 		// FIXME, don't hardcode this
-		tmp := re.FindStringSubmatch(out.String())[1]
-		hash = "<a href=\"/ipfs/" + tmp + "\">" + tmp + "</a>"
+		hash = Hash(re.FindStringSubmatch(out.String())[1])
+		//hash = "<a href=\"/ipfs/" + tmp + "\">" + tmp + "</a>"
+
 	}
 
+	return hash, err
+}
+
+func whoami() (Hash, error) {
+	cmd := exec.Command("ipfs", "config", "Identity.PeerID")
+	var (
+		out  bytes.Buffer
+		hash Hash
+	)
+	cmd.Stdout = &out
+	err := cmd.Run()
+	if err == nil {
+		hash = Hash(strings.Trim(out.String(), "\n"))
+	}
 	return hash, err
 }
 
@@ -46,7 +88,52 @@ func download(hash string, w io.Writer) error {
 	return cmd.Run()
 }
 
+func load(i interface{}, filename string) error {
+	file, err := os.Open(filename)
+	if err != nil {
+		return err
+	}
+	return json.NewDecoder(file).Decode(&i)
+}
+
+func save(i interface{}, filename string) error {
+	file, err := os.Create(filename)
+	if err != nil {
+		return err
+	}
+	return json.NewEncoder(file).Encode(&i)
+}
+
 func main() {
+	/*peerID, err := whoami()
+	if err != nil {
+		log.Fatal(err)
+	}*/
+	var prof Profile
+	load(&prof, "profile.json")
+	http.HandleFunc("/profile", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == "POST" {
+			r.ParseForm()
+			//fmt.Printf("%q", r.Form)
+			prof.Title = r.Form.Get("Title")
+			prof.Description = r.Form.Get("Description")
+			var buff bytes.Buffer
+			json.NewEncoder(&buff).Encode(prof)
+			hash, err := upload(&buff)
+			if err != nil {
+				log.Fatal(err)
+			}
+			log.Printf("%q\n", hash)
+			//save(prof, "profile.json")
+		}
+		tpl, err := template.ParseFiles("theme/index.html")
+		if err != nil {
+			log.Fatal(err)
+		}
+		tpl.Execute(w, prof)
+
+	})
+
 	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		res := []string{}
 		if r.Method == "POST" {
@@ -72,7 +159,7 @@ func main() {
 						log.Println(err)
 						res = append(res, err.Error())
 					}
-					res = append(res, hash)
+					res = append(res, string(hash))
 				}
 			}
 		}

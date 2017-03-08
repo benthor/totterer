@@ -17,6 +17,7 @@ import (
 )
 
 const VERSION = 0.1
+const CONFIG = "config.json"
 
 type Hash string
 
@@ -25,6 +26,28 @@ type Profile struct {
 	Title         string
 	Description   string
 	Subscriptions map[Hash]bool
+}
+
+func Hash2Profile(hash Hash) (*Profile, error) {
+	var (
+		buff    bytes.Buffer
+		profile Profile
+	)
+	download(hash, &buff)
+	err := json.NewDecoder(&buff).Decode(&profile)
+	return &profile, err
+}
+
+func (p *Profile) Hash() (Hash, error) {
+	var (
+		buff bytes.Buffer
+		hash Hash
+	)
+	err := json.NewEncoder(&buff).Encode(p)
+	if err != nil {
+		return hash, err
+	}
+	return upload(&buff)
 }
 
 type Post struct {
@@ -40,6 +63,58 @@ type Post struct {
 type Config struct {
 	Profile    Hash
 	LatestPost Hash
+}
+
+func LoadConfig() (*Config, error) {
+	file, err := os.Open(CONFIG)
+	if err != nil {
+		log.Println(err)
+		peerID, err := whoami()
+		if err != nil {
+			return nil, err
+		}
+		prof := Profile{peerID, "Default", "Default", map[Hash]bool{}}
+		hash, err := prof.Hash()
+		if err != nil {
+			return nil, err
+		}
+		config := Config{hash, peerID}
+		err = config.Save()
+		if err != nil {
+			return nil, err
+		}
+		return &config, err
+	}
+	var c Config
+	err = json.NewDecoder(file).Decode(&c)
+	return &c, err
+}
+
+func (c *Config) Save() error {
+	file, err := os.Create(CONFIG)
+	if err != nil {
+		return err
+	}
+	return json.NewEncoder(file).Encode(c)
+}
+
+func Upload(c *Config, r io.Reader) error {
+	hash, err := upload(r)
+	if err != nil {
+		log.Println(err)
+		return err
+	}
+	post := Post{"", time.Now(), hash, c.Profile, c.LatestPost, "", VERSION}
+	var buff bytes.Buffer
+	json.NewEncoder(&buff).Encode(post)
+	hash, err = upload(&buff)
+	if err != nil {
+		log.Println(err)
+		return err
+	}
+	c.LatestPost = hash
+
+	return nil
 }
 
 func upload(r io.Reader) (Hash, error) {
@@ -82,51 +157,36 @@ func whoami() (Hash, error) {
 	return hash, err
 }
 
-func download(hash string, w io.Writer) error {
-	cmd := exec.Command("ipfs", "cat", hash)
+func download(hash Hash, w io.Writer) error {
+	cmd := exec.Command("ipfs", "cat", string(hash))
 	cmd.Stdout = w
 	return cmd.Run()
 }
 
-func load(i interface{}, filename string) error {
-	file, err := os.Open(filename)
-	if err != nil {
-		return err
-	}
-	return json.NewDecoder(file).Decode(&i)
-}
-
-func save(i interface{}, filename string) error {
-	file, err := os.Create(filename)
-	if err != nil {
-		return err
-	}
-	return json.NewEncoder(file).Encode(&i)
-}
-
 func main() {
-	/*peerID, err := whoami()
+	config, err := LoadConfig()
 	if err != nil {
 		log.Fatal(err)
-	}*/
-	var prof Profile
-	load(&prof, "profile.json")
+	}
+	prof, err := Hash2Profile(config.Profile)
+	if err != nil {
+		log.Fatal(err)
+	}
 	http.HandleFunc("/profile", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == "POST" {
 			r.ParseForm()
 			//fmt.Printf("%q", r.Form)
 			prof.Title = r.Form.Get("Title")
 			prof.Description = r.Form.Get("Description")
-			var buff bytes.Buffer
-			json.NewEncoder(&buff).Encode(prof)
-			hash, err := upload(&buff)
+			hash, err := prof.Hash()
 			if err != nil {
 				log.Fatal(err)
 			}
-			log.Printf("%q\n", hash)
+			config.Profile = hash
+			config.Save()
 			//save(prof, "profile.json")
 		}
-		tpl, err := template.ParseFiles("theme/index.html")
+		tpl, err := template.ParseFiles("theme/profile.html")
 		if err != nil {
 			log.Fatal(err)
 		}
@@ -182,7 +242,7 @@ func main() {
 	})
 
 	http.HandleFunc("/ipfs/", func(w http.ResponseWriter, r *http.Request) {
-		err := download(r.URL.Path, w)
+		err := download(Hash(r.URL.Path), w)
 		if err != nil {
 			log.Println(err)
 		}

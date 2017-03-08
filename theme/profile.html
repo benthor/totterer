@@ -1,0 +1,16 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="UTF-8">
+    <title>{{.Title}}</title>
+  </head>
+  <body>
+    <form name="upload" method="POST" action="/profile">
+      <!--      <input type="file" name="fileupload" multiple/>-->
+      <input type="text" name="PeerID" value="{{.PeerID}}" disabled />
+      <input type="text" name="Title" value="{{.Title}}" />
+      <input type="text" name="Description" value="{{.Description}}" />
+      <input type="submit" value="Go" />
+    </form>
+  </body>
+</html>

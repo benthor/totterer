@@ -7,11 +7,10 @@ import (
 	"log"
 	//	"mime/multipart"
 	"encoding/json"
+	ipfs "github.com/benthor/totterer/util"
 	"html/template"
 	"net/http"
 	"os"
-	"os/exec"
-	"regexp"
 	"strings"
 	"time"
 )
@@ -19,43 +18,37 @@ import (
 const VERSION = 0.1
 const STATE = "state.json"
 
-type Hash string
-
 type Profile struct {
-	PeerID        Hash
+	PeerID        ipfs.Name
 	Title         string
 	Description   string
-	Subscriptions map[Hash]bool
+	Subscriptions map[ipfs.Name]bool
 }
 
-func hash2interface(hash Hash, i interface{}) error {
+func hash2interface(addr ipfs.Address, i interface{}) error {
 	var buff bytes.Buffer
-	err := download(hash, &buff)
+	err := addr.Download(&buff)
 	if err != nil {
 		return err
 	}
 	return json.NewDecoder(&buff).Decode(&i)
 }
 
-func interface2hash(i interface{}) (Hash, error) {
-	var (
-		hash Hash
-		buff bytes.Buffer
-	)
-	err := json.NewEncoder(&buff).Encode(&i)
+func interface2hash(i interface{}) (hash ipfs.Hash, err error) {
+	var buff bytes.Buffer
+	err = json.NewEncoder(&buff).Encode(&i)
 	if err != nil {
-		return hash, err
+		return
 	}
-	return upload(&buff)
+	return ipfs.Upload(&buff)
 }
 
-func Hash2Profile(hash Hash) (*Profile, error) {
-	var profile Profile
-	err := hash2interface(hash, &profile)
-	return &profile, err
+func Hash2Profile(hash ipfs.Hash) (profile *Profile, err error) {
+	err = hash2interface(hash, profile)
+	return profile, err
 }
 
-func (p *Profile) Hash() (Hash, error) {
+func (p *Profile) Hash() (ipfs.Hash, error) {
 	return interface2hash(p)
 
 }
@@ -63,130 +56,75 @@ func (p *Profile) Hash() (Hash, error) {
 type Post struct {
 	Type     string // TODO
 	Time     time.Time
-	Content  Hash
-	Profile  Hash
-	Previous Hash
-	Via      Hash
+	Content  ipfs.Hash
+	Profile  ipfs.Hash
+	Previous ipfs.Hash
+	Via      ipfs.Hash
 	Version  float64
 }
 
-func Hash2Post(hash Hash) (*Post, error) {
-	var post Post
-	err := hash2interface(hash, &post)
-	return &post, err
+func Hash2Post(hash ipfs.Hash) (post *Post, err error) {
+	err = hash2interface(hash, &post)
+	return
 }
 
-func (p *Post) Hash() (Hash, error) {
+func (p *Post) Hash() (ipfs.Hash, error) {
 	return interface2hash(p)
 }
 
 type State struct {
-	Profile             Hash
-	LatestPost          Hash
-	SubscriptionsLatest map[Hash]Hash
+	Profile             ipfs.Hash
+	LatestPost          ipfs.Hash
+	SubscriptionsLatest map[ipfs.Name]ipfs.Hash
 }
 
-func LoadState() (*State, error) {
+func LoadState() (state *State, err error) {
 	file, err := os.Open(STATE)
 	if err != nil {
 		log.Println(err)
-		peerID, err := whoami()
+		peerID, err := ipfs.Whoami()
 		if err != nil {
 			log.Println(err)
 			return nil, err
 		}
-		prof := Profile{peerID, "Change Me", "Change Me Too", map[Hash]bool{peerID: true}}
+		prof := Profile{peerID, "Change Me", "Change Me Too", map[ipfs.Name]bool{peerID: true}}
 		hash, err := prof.Hash()
 		if err != nil {
 			return nil, err
 		}
-		state := State{hash, "", map[Hash]Hash{}}
+		state = &State{hash, "", map[ipfs.Name]ipfs.Hash{}}
 		err = state.Save()
 		if err != nil {
 			return nil, err
 		}
-		return &state, err
+	} else {
+		err = json.NewDecoder(file).Decode(&state)
 	}
-	var c State
-	err = json.NewDecoder(file).Decode(&c)
-	return &c, err
+	return state, err
 }
 
-func (c *State) Save() error {
+func (s *State) Save() error {
 	file, err := os.Create(STATE)
 	if err != nil {
 		log.Println(err)
 		return err
 	}
 	log.Println("updating local state")
-	return json.NewEncoder(file).Encode(c)
+	return json.NewEncoder(file).Encode(s)
 }
 
-func (c *State) NewPost(r io.Reader) error {
-	hash, err := upload(r)
+func (s *State) NewPost(r io.Reader) error {
+	hash, err := ipfs.Upload(r)
 	if err != nil {
 		log.Println(err)
 		return err
 	}
-	post := Post{"", time.Now(), hash, c.Profile, c.LatestPost, "", VERSION}
+	post := Post{"", time.Now(), hash, s.Profile, s.LatestPost, "", VERSION}
 	hash, err = post.Hash()
-	if err != nil {
-		log.Println(err)
-	} else {
-		c.LatestPost = hash
-		c.Save()
-		err = publish(hash)
-	}
+	s.LatestPost = hash
+	s.Save()
+	_, err = hash.Publish()
 	return err
-}
-
-func upload(r io.Reader) (Hash, error) {
-	var (
-		out  bytes.Buffer
-		hash Hash
-		err  error
-		re   *regexp.Regexp
-	)
-	re = regexp.MustCompile("added ([^ ]*)")
-	cmd := exec.Command("ipfs", "add", "-")
-	cmd.Stdin = r
-	cmd.Stdout = &out
-	err = cmd.Run()
-	if err == nil {
-		// FIXME, don't hardcode this
-		hash = Hash(re.FindStringSubmatch(out.String())[1])
-		//hash = "<a href=\"/ipfs/" + tmp + "\">" + tmp + "</a>"
-
-	} else {
-		log.Println(err)
-	}
-
-	return hash, err
-}
-
-func publish(hash Hash) error {
-	//re = regexp.MustCompile("Published to ([^:]*):")
-	return exec.Command("ipfs", "name", "publish", string(hash)).Run()
-}
-
-func download(hash Hash, w io.Writer) error {
-	cmd := exec.Command("ipfs", "cat", string(hash))
-	cmd.Stdout = w
-	return cmd.Run()
-}
-
-func whoami() (Hash, error) {
-	cmd := exec.Command("ipfs", "config", "Identity.PeerID")
-	var (
-		out  bytes.Buffer
-		hash Hash
-	)
-	cmd.Stdout = &out
-	err := cmd.Run()
-	if err == nil {
-		hash = Hash(strings.Trim(out.String(), "\n"))
-	}
-	return hash, err
 }
 
 func main() {
@@ -254,7 +192,7 @@ func main() {
 			}
 		}
 		if r.URL.Path != "/" {
-			post, err = Hash2Post(Hash(strings.Trim(r.URL.Path, "/")))
+			post, err = Hash2Post(ipfs.Hash(strings.Trim(r.URL.Path, "/")))
 		} else {
 			post, err = Hash2Post(state.LatestPost)
 		}
@@ -271,7 +209,7 @@ func main() {
 	})
 
 	http.HandleFunc("/ipfs/", func(w http.ResponseWriter, r *http.Request) {
-		err := download(Hash(r.URL.Path), w)
+		err := ipfs.Hash(r.URL.Path).Download(w)
 		if err != nil {
 			log.Println(err)
 		}

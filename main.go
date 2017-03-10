@@ -7,7 +7,7 @@ import (
 	"log"
 	//	"mime/multipart"
 	"encoding/json"
-	ipfs "github.com/benthor/totterer/util"
+	ipfs "github.com/benthor/totterer/ipfs"
 	"html/template"
 	"net/http"
 	"os"
